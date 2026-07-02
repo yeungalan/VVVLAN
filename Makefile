@@ -1,0 +1,26 @@
+GO ?= go
+
+.PHONY: build test race smoke cross clean
+
+build:
+	$(GO) build -o bin/ ./cmd/...
+
+test:
+	$(GO) test ./...
+
+race:
+	$(GO) test -race ./...
+
+# Linux-only, requires root: full-stack smoke test in network namespaces.
+smoke: 
+	bash scripts/smoke-netns.sh
+
+cross:
+	GOOS=linux   GOARCH=amd64 $(GO) build -o bin/linux-amd64/   ./cmd/...
+	GOOS=linux   GOARCH=arm64 $(GO) build -o bin/linux-arm64/   ./cmd/...
+	GOOS=darwin  GOARCH=amd64 $(GO) build -o bin/darwin-amd64/  ./cmd/...
+	GOOS=darwin  GOARCH=arm64 $(GO) build -o bin/darwin-arm64/  ./cmd/...
+	GOOS=windows GOARCH=amd64 $(GO) build -o bin/windows-amd64/ ./cmd/...
+
+clean:
+	rm -rf bin
