@@ -236,7 +236,9 @@ func cmdUp(args []string) error {
 func defaultTunName() string {
 	switch runtime.GOOS {
 	case "darwin":
-		return "" // macOS assigns utunN automatically
+		// macOS TUN names must be utun[0-9]*; plain "utun" asks the kernel
+		// to pick the next free number.
+		return "utun"
 	default:
 		return "vvvlan0"
 	}

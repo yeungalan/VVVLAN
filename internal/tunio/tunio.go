@@ -9,9 +9,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
+	"runtime"
 
 	"golang.zx2c4.com/wireguard/tun"
 )
+
+// utunNameRE matches the interface names macOS accepts for TUN devices.
+var utunNameRE = regexp.MustCompile(`^utun[0-9]*$`)
 
 // DefaultMTU keeps tunneled packets under the typical 1500-byte path MTU
 // after adding UDP, noise, and relay overhead.
@@ -43,11 +48,19 @@ type tunDevice struct {
 // Linux virtio headers).
 const offset = 16
 
-// CreateTUN creates the native TUN interface. Pass "" for name to let the OS
-// choose (required on macOS, where the name must be utun[0-9]*).
+// CreateTUN creates the native TUN interface. Pass "" for name to use a
+// per-OS default. On macOS the kernel only accepts utun[0-9]* (or plain
+// "utun" to auto-number), so other names are coerced to "utun" there.
 func CreateTUN(name string, mtu int) (Device, error) {
 	if mtu <= 0 {
 		mtu = DefaultMTU
+	}
+	if runtime.GOOS == "darwin" {
+		if !utunNameRE.MatchString(name) {
+			name = "utun"
+		}
+	} else if name == "" {
+		name = "vvvlan0"
 	}
 	dev, err := tun.CreateTUN(name, mtu)
 	if err != nil {
