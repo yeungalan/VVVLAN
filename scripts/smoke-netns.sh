@@ -160,4 +160,33 @@ ip netns exec ns1 "$WORK/bin/vvvland" exit off >/dev/null
 stop_agents
 
 echo
+echo "=== scenario 4: internet passthrough via userspace NAT (netstack) ==="
+# Same as scenario 3 but the gateway NATs in userspace (no kernel
+# forwarding/iptables) — the fallback used on Windows Home and macOS.
+# ICMP does not traverse userspace NAT, so verify with TCP: fetch the
+# control server's health endpoint via its "internet" address.
+ip netns exec ns1 "$WORK/bin/vvvland" up --state "$WORK/ns1" --debug >"$WORK/ns1.log" 2>&1 &
+A1_PID=$!
+ip netns exec ns2 "$WORK/bin/vvvland" up --state "$WORK/ns2" --userspace-nat --debug >"$WORK/ns2.log" 2>&1 &
+A2_PID=$!
+wait_ping ns1 "$VIP2" || fail "overlay ping (userspace NAT scenario)"
+for _ in $(seq 1 10); do
+  if ip netns exec ns1 "$WORK/bin/vvvland" exit on >/dev/null 2>&1; then break; fi
+  sleep 1
+done
+ok=""
+for _ in $(seq 1 15); do
+  if BODY=$(ip netns exec ns1 curl -fsS -m 3 "http://198.51.100.1:$HTTP_PORT/api/health" 2>/dev/null); then
+    ok=1; break
+  fi
+  sleep 1
+done
+[ -n "$ok" ] || fail "TCP via userspace-NAT gateway"
+echo "$BODY" | grep -q '"ok"' || fail "unexpected response body: $BODY"
+ip netns exec ns2 "$WORK/bin/vvvland" status | grep -q "userspace NAT" || fail "gateway not in userspace NAT mode"
+echo "    TCP fetch through userspace-NAT gateway OK ($BODY)"
+ip netns exec ns1 "$WORK/bin/vvvland" exit off >/dev/null
+stop_agents
+
+echo
 echo "ALL SMOKE SCENARIOS PASSED"

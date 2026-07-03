@@ -175,6 +175,7 @@ func cmdUp(args []string) error {
 	tunName := fs.String("tun", defaultTunName(), "TUN interface name")
 	localAPI := fs.String("localapi", "127.0.0.1:4646", "local API listen address")
 	exit := fs.Bool("exit", false, "enable internet passthrough via the gateway at startup")
+	usrNAT := fs.Bool("userspace-nat", false, "when acting as gateway, always NAT in userspace (netstack) instead of configuring the OS")
 	debug := fs.Bool("debug", false, "verbose logging")
 	fs.Parse(args)
 
@@ -221,6 +222,7 @@ func cmdUp(args []string) error {
 		ReportPath: func(rep proto.PathReport) {
 			ws.SendPathReport(rep)
 		},
+		UserspaceNAT: *usrNAT,
 	})
 	if err != nil {
 		dev.Close()

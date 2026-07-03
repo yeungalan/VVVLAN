@@ -11,6 +11,7 @@ import (
 	"github.com/yeungalan/vvvlan/internal/identity"
 	"github.com/yeungalan/vvvlan/internal/noise"
 	"github.com/yeungalan/vvvlan/internal/proto"
+	"github.com/yeungalan/vvvlan/internal/usernat"
 )
 
 // UpdateNetMap reconciles the engine with a netmap pushed by the control
@@ -105,36 +106,95 @@ func (e *Engine) UpdateNetMap(nm *proto.NetMap) {
 		e.bindRelay()
 	}
 
-	// Gateway role: turn OS NAT on/off to match the netmap. Netmaps arrive
+	// Gateway role: turn NAT on/off to match the netmap. Netmaps arrive
 	// frequently, so failed attempts are retried on a cool-down instead of
 	// on every update.
 	switch {
 	case isGateway && !natActive && natRetryOK:
-		if err := e.cfg.NetCfg.EnableGatewayNAT(cidr); err != nil {
+		if err := e.enableGatewayNAT(cidr); err != nil {
 			e.log.Error("enabling gateway NAT failed; retrying in 5m", "err", err)
 			e.mu.Lock()
 			e.natRetryAt = time.Now().Add(5 * time.Minute)
 			e.mu.Unlock()
-		} else {
-			e.mu.Lock()
-			e.natActive = true
-			e.mu.Unlock()
-			e.log.Info("this node is now the internet gateway for the network")
 		}
 	case !isGateway:
-		if natActive {
-			if err := e.cfg.NetCfg.DisableGatewayNAT(); err != nil {
-				e.log.Warn("disabling gateway NAT failed", "err", err)
-			}
-		}
-		e.mu.Lock()
-		e.natActive = false
-		e.natRetryAt = time.Time{} // re-designation retries immediately
-		e.mu.Unlock()
+		e.disableGatewayNAT()
 	}
 
 	e.reconcileExit()
 	e.refreshEndpoints()
+}
+
+// enableGatewayNAT makes this node the internet gateway. OS-level NAT is
+// preferred (kernel-speed forwarding); when it is unavailable — Windows
+// Home without WinNAT, macOS without a pf rule — or when UserspaceNAT is
+// set, gateway traffic is NATed in userspace with an in-process TCP/IP
+// stack, the way Tailscale's netstack mode does it. Userspace mode forwards
+// TCP and UDP (not ICMP) and needs no OS configuration at all.
+func (e *Engine) enableGatewayNAT(cidr netip.Prefix) error {
+	if !e.cfg.UserspaceNAT {
+		if err := e.cfg.NetCfg.EnableGatewayNAT(cidr); err == nil {
+			e.mu.Lock()
+			e.natActive = true
+			e.natMode = "kernel"
+			e.mu.Unlock()
+			e.log.Info("this node is now the internet gateway for the network", "nat", "kernel")
+			return nil
+		} else {
+			e.log.Warn("OS gateway NAT unavailable, falling back to userspace NAT (TCP/UDP only)", "err", err)
+		}
+	}
+	unat, err := usernat.New(e.cfg.MTU, e.emitFromNAT, e.log)
+	if err != nil {
+		return fmt.Errorf("starting userspace NAT: %w", err)
+	}
+	e.mu.Lock()
+	e.unat = unat
+	e.natActive = true
+	e.natMode = "userspace"
+	e.mu.Unlock()
+	e.log.Info("this node is now the internet gateway for the network", "nat", "userspace")
+	return nil
+}
+
+func (e *Engine) disableGatewayNAT() {
+	e.mu.Lock()
+	wasActive := e.natActive
+	mode := e.natMode
+	unat := e.unat
+	e.unat = nil
+	e.natActive = false
+	e.natMode = ""
+	e.natRetryAt = time.Time{} // re-designation retries immediately
+	e.mu.Unlock()
+	if !wasActive {
+		return
+	}
+	if unat != nil {
+		unat.Close()
+	}
+	if mode == "kernel" {
+		if err := e.cfg.NetCfg.DisableGatewayNAT(); err != nil {
+			e.log.Warn("disabling gateway NAT failed", "err", err)
+		}
+	}
+	e.log.Info("gateway role removed")
+}
+
+// emitFromNAT delivers packets synthesized by the userspace NAT (responses
+// for overlay clients) back through the encrypted tunnel.
+func (e *Engine) emitFromNAT(pkt []byte) {
+	dst, ok := ipv4Dst(pkt)
+	if !ok {
+		return
+	}
+	e.mu.Lock()
+	peer := e.peersByVIP[dst]
+	e.mu.Unlock()
+	if peer == nil {
+		return
+	}
+	e.sendToPeer(peer, pkt)
 }
 
 // resolveRelay resolves the relay's host:port (DNS allowed) to an address.
@@ -244,6 +304,7 @@ type Status struct {
 	PublicAddr  string       `json:"public_addr,omitempty"`
 	ExitEnabled bool         `json:"exit_enabled"`
 	IsGateway   bool         `json:"is_gateway"`
+	NATMode     string       `json:"nat_mode,omitempty"` // kernel|userspace when gateway
 	Peers       []PeerStatus `json:"peers"`
 }
 
@@ -257,6 +318,7 @@ func (e *Engine) Snapshot() Status {
 		RelayBound:  e.relayHealthyLocked(),
 		ExitEnabled: e.exitActive,
 		IsGateway:   e.gatewayID == e.self.String(),
+		NATMode:     e.natMode,
 	}
 	if e.selfVIP.IsValid() {
 		st.VirtualIP = e.selfVIP.String()

@@ -93,9 +93,14 @@ vvvland exit on    # route all internet traffic via the gateway
 vvvland exit off
 ```
 
-The gateway node NATs overlay traffic to the internet (configured
-automatically on Linux via iptables and on Windows via NetNat; macOS
-gateways need a one-time manual `pfctl` rule that the agent prints).
+The gateway node NATs overlay traffic to the internet. OS-level NAT is
+used where available (Linux iptables, Windows Pro/Server NetNat, macOS with
+a pf rule); everywhere else — including Windows Home — the agent
+automatically falls back to **userspace NAT**: gateway traffic is
+terminated by an in-process TCP/IP stack (gVisor netstack, the same
+approach Tailscale uses) and re-dialed as ordinary sockets, with zero OS
+configuration. Userspace mode forwards TCP and UDP; ICMP ping does not
+traverse it. Pass `--userspace-nat` to `vvvland up` to force it.
 Clients keep their tunnel/control traffic pinned to the physical route, so
 there is no routing loop.
 
@@ -103,7 +108,7 @@ there is no routing loop.
 
 ```
 vvvland join --server <url> --token <tok> [--name <name>] [--state <dir>]
-vvvland up   [--port <udp>] [--tun <name>] [--exit] [--debug]
+vvvland up   [--port <udp>] [--tun <name>] [--exit] [--userspace-nat] [--debug]
 vvvland status [--json]
 vvvland exit on|off
 
@@ -158,8 +163,8 @@ go test ./...                 # unit + in-memory end-to-end tests
 go test -race ./...
 sudo bash scripts/smoke-netns.sh   # Linux: full-stack test in network
                                    # namespaces: real TUN, direct P2P,
-                                   # firewalled relay fallback, and
-                                   # internet passthrough
+                                   # firewalled relay fallback, and internet
+                                   # passthrough (kernel + userspace NAT)
 ```
 
 Cross-compile:
@@ -184,6 +189,7 @@ internal/relay       relay/bridge + endpoint reflector
 internal/engine      data plane: routing, sessions, NAT traversal
 internal/tunio       cross-platform TUN abstraction
 internal/netcfg      per-OS address/route/NAT configuration
+internal/usernat     userspace NAT (gVisor netstack) for gateways
 internal/ui          embedded admin web UI
 ```
 
@@ -220,15 +226,13 @@ vvvland up --port 41642
 netsh advfirewall firewall add rule name="vvvland" dir=in action=allow protocol=UDP localport=41642
 ```
 
-**Gateway on Windows logs `enabling gateway NAT failed` with HRESULT 0x80041010**
+**Gateway logs `OS gateway NAT unavailable, falling back to userspace NAT`**
 
-That Windows edition has no WinNAT (`New-NetNat` is only available on
-Windows Pro/Server; Home lacks the NetNat WMI class entirely). Internet
-passthrough can't be set up automatically there — designate a Linux, macOS,
-or Windows Pro/Server node as the network gateway instead. On Pro/Server,
-the agent also starts the `winnat` service automatically if it is stopped.
-This only affects internet passthrough; normal peer-to-peer overlay traffic
-through that node works regardless.
+Normal on Windows Home (no WinNAT) and on macOS without a pf rule: the
+gateway keeps working, but NATs in userspace via the embedded netstack.
+TCP and UDP flow through fine; ICMP ping through the gateway does not, so
+test passthrough with a browser/curl rather than ping. Use a Linux or
+Windows Pro/Server gateway if you need kernel-speed forwarding or ICMP.
 
 **A node shows `—` under Connectivity in the UI**
 

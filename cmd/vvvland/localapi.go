@@ -108,7 +108,11 @@ func cmdStatus(args []string) error {
 	}
 	fmt.Printf("relay       %s (bound: %v)\n", st.RelayAddr, st.RelayBound)
 	if st.IsGateway {
-		fmt.Println("role        internet gateway for this network")
+		mode := st.NATMode
+		if mode == "" {
+			mode = "starting"
+		}
+		fmt.Printf("role        internet gateway for this network (%s NAT)\n", mode)
 	}
 	if st.ExitEnabled {
 		fmt.Println("passthrough internet traffic routed via gateway")
