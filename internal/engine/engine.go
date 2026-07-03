@@ -108,6 +108,8 @@ type peerState struct {
 	queue    [][]byte
 	lastHS   time.Time
 	localIdx uint32 // index of in-flight handshake we initiated
+
+	lastReport string // last path state sent to the control server
 }
 
 // Engine is the node data-plane engine.
@@ -127,18 +129,23 @@ type Engine struct {
 	// static key, to reject replayed initiations.
 	lastInitTS map[identity.PublicKey]noise.Timestamp
 
-	selfVIP    netip.Addr
-	cidr       netip.Prefix
-	gatewayID  string
-	relayAddr  netip.AddrPort
-	relayName  string // unresolved host:port from the netmap
-	relayBound bool
-	observedEP netip.AddrPort
-	lastEPs    string // last endpoint set sent to control
-	exitWanted bool
-	exitActive bool
-	natActive  bool
-	controlIPs []netip.Addr // pinned when exit mode is enabled
+	selfVIP   netip.Addr
+	cidr      netip.Prefix
+	gatewayID string
+	relayAddr netip.AddrPort
+	relayName string // unresolved host:port from the netmap
+	// Relay health: a bind is confirmed by a BindOK; if confirmations stop
+	// arriving the relay is considered unreachable again.
+	bindSince     time.Time // first bind attempt for the current relay addr
+	lastBindOK    time.Time
+	lastRelayWarn time.Time
+	observedEP    netip.AddrPort
+	lastEPs       string // last endpoint set sent to control
+	exitWanted    bool
+	exitActive    bool
+	natActive     bool
+	natRetryAt    time.Time    // cool-down after a failed gateway NAT setup
+	controlIPs    []netip.Addr // pinned when exit mode is enabled
 
 	closed chan struct{}
 }
@@ -400,6 +407,7 @@ func (e *Engine) installSession(peer *peerState, localIdx uint32, sess *noise.Se
 	peer.session = sess
 	e.sessions[localIdx] = &sessionEntry{sess: sess, peer: peer}
 	e.mu.Unlock()
+	e.reportPath(peer)
 }
 
 func (e *Engine) flushQueue(peer *peerState) {
@@ -473,13 +481,13 @@ func (e *Engine) handleUDP(pkt []byte, from netip.AddrPort) {
 		}
 	case proto.TypeRelayBindOK:
 		e.mu.Lock()
-		e.relayBound = true
+		e.lastBindOK = time.Now()
 		e.mu.Unlock()
 	case proto.TypeRelayBindErr:
 		e.mu.Lock()
-		e.relayBound = false
+		e.lastBindOK = time.Time{}
 		e.mu.Unlock()
-		e.log.Warn("relay rejected our bind (stale session token?)")
+		e.log.Warn("relay rejected our bind (stale session token?) — try re-joining the network")
 	case proto.TypeWhoAmIResp:
 		_, observed, err := proto.DecodeWhoAmIResp(pkt[1:])
 		if err != nil {

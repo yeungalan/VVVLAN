@@ -130,7 +130,15 @@ start_agents
 wait_ping ns1 "$VIP2" || fail "overlay ping (relay scenario)"
 sleep 2
 [ "$(peer_direct ns1)" = "False" ] || fail "expected relayed path in scenario 2"
-echo "    ping OK, path=relay"
+# The admin API must show the relayed path too (UI connectivity column).
+api GET "/api/networks/$NET_ID/nodes" | python3 -c "
+import sys, json
+nodes = json.load(sys.stdin)
+paths = [p for n in nodes for p in (n.get('paths') or [])]
+assert paths, 'no path reports reached the control server'
+assert all(not p['direct'] for p in paths), paths
+" || fail "relay path not reported to the admin API"
+echo "    ping OK, path=relay (reported to UI)"
 stop_agents
 iptables -D FORWARD -s 10.200.1.0/24 -d 10.200.2.0/24 -j DROP
 iptables -D FORWARD -s 10.200.2.0/24 -d 10.200.1.0/24 -j DROP

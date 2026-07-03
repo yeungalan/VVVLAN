@@ -187,6 +187,55 @@ internal/netcfg      per-OS address/route/NAT configuration
 internal/ui          embedded admin web UI
 ```
 
+## Troubleshooting
+
+**Peers can't reach each other and `vvvland status` shows `relay (bound: false)`**
+
+The relay UDP port (default `41641`) is not reachable from the nodes. The
+agent also logs `relay server is not responding` after ~30 s. Direct P2P may
+still work between machines on the same LAN, but anything that needs the
+relay or hole-punch coordination will not. Fix the path to the relay:
+
+- Windows server: allow inbound UDP through the firewall:
+
+  ```
+  netsh advfirewall firewall add rule name="vvvlan relay" dir=in action=allow protocol=UDP localport=41641
+  ```
+
+- Linux server: `sudo ufw allow 41641/udp` (or the equivalent for your
+  firewall).
+- Server behind a home router: forward UDP `41641` to the server, and make
+  sure nodes join using the router's public address (or run the server on a
+  host with a public IP).
+
+**Nodes always show `relay`, never `direct`**
+
+Hole punching works through most NATs, but a local firewall that blocks all
+inbound UDP on the *node* prevents probes from landing. Run the agent on a
+fixed port and allow it:
+
+```
+vvvland up --port 41642
+# Windows:
+netsh advfirewall firewall add rule name="vvvland" dir=in action=allow protocol=UDP localport=41642
+```
+
+**Gateway on Windows logs `enabling gateway NAT failed` with HRESULT 0x80041010**
+
+That Windows edition has no WinNAT (`New-NetNat` is only available on
+Windows Pro/Server; Home lacks the NetNat WMI class entirely). Internet
+passthrough can't be set up automatically there — designate a Linux, macOS,
+or Windows Pro/Server node as the network gateway instead. On Pro/Server,
+the agent also starts the `winnat` service automatically if it is stopped.
+This only affects internet passthrough; normal peer-to-peer overlay traffic
+through that node works regardless.
+
+**A node shows `—` under Connectivity in the UI**
+
+No tunnel to any peer has been established yet (paths appear after the
+first traffic or probe exchange). Ping the peer's virtual IP and re-check;
+if it stays `—`, check the relay reachability above.
+
 ## Security notes
 
 - All peer traffic is end-to-end encrypted with per-pair sessions and replay

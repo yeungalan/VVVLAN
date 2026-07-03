@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"runtime"
 
 	"github.com/yeungalan/vvvlan/internal/control"
 	"github.com/yeungalan/vvvlan/internal/relay"
@@ -66,6 +67,12 @@ func main() {
 	fmt.Fprintf(os.Stderr, "  web UI:    http://localhost%s/\n", normalizePort(*listen))
 	fmt.Fprintf(os.Stderr, "  admin key: %s\n", store.AdminKey())
 	fmt.Fprintf(os.Stderr, "  relay UDP: %s\n\n", *relayListen)
+	fmt.Fprintf(os.Stderr, "  NOTE: nodes must be able to reach the relay UDP port from outside.\n")
+	if runtime.GOOS == "windows" {
+		fmt.Fprintf(os.Stderr, "  Windows Firewall blocks inbound UDP by default — allow it with:\n")
+		fmt.Fprintf(os.Stderr, "    netsh advfirewall firewall add rule name=\"vvvlan relay\" dir=in action=allow protocol=UDP localport=%s\n", portOf(*relayListen))
+	}
+	fmt.Fprintf(os.Stderr, "  If this host is behind a router, forward UDP %s to it.\n\n", portOf(*relayListen))
 
 	log.Info("control server listening", "http", *listen, "relay", *relayListen)
 	if err := http.ListenAndServe(*listen, ctrl.Handler()); err != nil {
@@ -90,6 +97,13 @@ func advertisedRelayAddr(public, listen string) string {
 func normalizePort(listen string) string {
 	if _, port, ok := splitHostPort(listen); ok {
 		return ":" + port
+	}
+	return listen
+}
+
+func portOf(listen string) string {
+	if _, port, ok := splitHostPort(listen); ok {
+		return port
 	}
 	return listen
 }
