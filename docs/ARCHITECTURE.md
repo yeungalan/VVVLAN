@@ -138,10 +138,22 @@ Inbound (UDP → TUN), after decryption:
 
 ## Internet passthrough (exit node)
 
-Gateway side (automatic when the netmap designates this node): enable IP
-forwarding and NAT from the overlay CIDR out the default-route interface
-(Linux: sysctl + iptables MASQUERADE; Windows: `New-NetNat`; macOS: manual
-`pfctl` rule, instructions are printed).
+Gateway side (automatic when the netmap designates this node): prefer
+OS-level NAT — enable IP forwarding and NAT from the overlay CIDR out the
+default-route interface (Linux: sysctl + iptables MASQUERADE; Windows
+Pro/Server: `New-NetNat`, starting the `winnat` service if needed).
+
+When OS NAT is unavailable (Windows Home, macOS without a pf rule) or
+`--userspace-nat` is set, the gateway falls back to **userspace NAT**
+(`internal/usernat`), the approach Tailscale's netstack mode uses: packets
+from peers destined outside the overlay are injected into an in-process
+gVisor netstack configured as a promiscuous/spoofing router; TCP and UDP
+forwarders terminate each flow and splice it onto an ordinary outbound
+socket, so return traffic is synthesized back toward the overlay client and
+routed through the encrypted tunnel. No forwarding, firewall, or NAT
+configuration is touched. Loopback destinations are refused (an overlay
+client must not reach services bound to the gateway's 127.0.0.1), and ICMP
+is not forwarded in this mode.
 
 Client side (`vvvland exit on`): install `0.0.0.0/1` + `128.0.0.0/1` routes
 onto the TUN (they outrank the physical default route without deleting it),
@@ -170,6 +182,7 @@ Everything is rolled back on `exit off` or shutdown.
   no relay mesh/geo selection.
 - Netmaps are sent as full snapshots, which is fine for small/medium
   networks but not incremental.
-- macOS gateway NAT requires one manual pf rule.
+- macOS/Windows-Home gateways use userspace NAT automatically (TCP/UDP
+  only, no ICMP); kernel NAT on macOS still requires a manual pf rule.
 - No MFA/SSO on the admin API — front it with TLS and keep the admin key
   secret.

@@ -20,6 +20,7 @@ import (
 	"github.com/yeungalan/vvvlan/internal/noise"
 	"github.com/yeungalan/vvvlan/internal/proto"
 	"github.com/yeungalan/vvvlan/internal/tunio"
+	"github.com/yeungalan/vvvlan/internal/usernat"
 )
 
 const (
@@ -73,6 +74,11 @@ type Config struct {
 	ReportEndpoints func(endpoints []string)
 	// ReportPath publishes path telemetry for the UI. Optional.
 	ReportPath func(rep proto.PathReport)
+
+	// UserspaceNAT forces gateway NAT to run in userspace (netstack) even
+	// when OS NAT is available. It is always used as a fallback when OS NAT
+	// setup fails.
+	UserspaceNAT bool
 }
 
 type sessionEntry struct {
@@ -144,6 +150,8 @@ type Engine struct {
 	exitWanted    bool
 	exitActive    bool
 	natActive     bool
+	natMode       string       // "kernel" or "userspace" while natActive
+	unat          *usernat.NAT // non-nil while userspace NAT is active
 	natRetryAt    time.Time    // cool-down after a failed gateway NAT setup
 	controlIPs    []netip.Addr // pinned when exit mode is enabled
 
@@ -223,6 +231,13 @@ func (e *Engine) shutdown() {
 	e.dev.Close()
 	e.cfg.NetCfg.DisableExit()
 	e.cfg.NetCfg.DisableGatewayNAT()
+	e.mu.Lock()
+	unat := e.unat
+	e.unat = nil
+	e.mu.Unlock()
+	if unat != nil {
+		unat.Close()
+	}
 }
 
 // ---- TUN -> network ----
@@ -520,6 +535,7 @@ func (e *Engine) handleTransport(payload []byte, from netip.AddrPort, viaRelaySr
 	peer.lastPong = time.Now() // any authenticated traffic proves liveness
 	selfVIP, cidr := e.selfVIP, e.cidr
 	isGatewaySelf := e.gatewayID == e.self.String()
+	unat := e.unat
 	e.mu.Unlock()
 
 	src, dst, ok := ipv4SrcDst(inner)
@@ -533,8 +549,14 @@ func (e *Engine) handleTransport(payload []byte, from netip.AddrPort, viaRelaySr
 		return
 	}
 	// Destination must be us, unless we are the gateway forwarding
-	// internet-bound traffic into the OS NAT.
+	// internet-bound traffic into the NAT.
 	if dst != selfVIP && !(isGatewaySelf && !cidr.Contains(dst)) {
+		return
+	}
+	if dst != selfVIP && unat != nil {
+		// Userspace NAT (netstack): terminate and re-dial the flow in
+		// process instead of relying on OS forwarding.
+		unat.InjectInbound(inner)
 		return
 	}
 	e.dev.WritePacket(inner)
