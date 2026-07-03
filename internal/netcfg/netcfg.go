@@ -7,6 +7,7 @@ package netcfg
 import (
 	"fmt"
 	"log/slog"
+	"net"
 	"net/netip"
 	"os/exec"
 	"strings"
@@ -118,12 +119,40 @@ func (m *Manager) pinLocked(addr netip.Addr) error {
 	if !addr.Is4() || addr.IsLoopback() {
 		return nil
 	}
+	// On-link destinations are already covered by a connected route, which
+	// is more specific than the /1 exit routes; pinning them through the
+	// router would break on routers that refuse to hairpin LAN traffic.
+	if onLink(addr) {
+		return nil
+	}
 	if err := addHostRoute(addr, m.origGW, m.origIf); err != nil {
 		return err
 	}
 	m.pinned[addr] = true
 	return nil
 }
+
+// onLink reports whether addr falls inside a prefix assigned to any local
+// interface.
+func onLink(addr netip.Addr) bool {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	ip := net.IP(addr.AsSlice())
+	for _, a := range addrs {
+		if ipNet, ok := a.(*net.IPNet); ok && ipNet.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// KernelNATSupported reports whether this OS has a reliable, automatable
+// kernel NAT for gateway mode. Where it does not (Windows WinNAT is flaky
+// and absent on Home; macOS pf needs manual rules), gateways use userspace
+// NAT instead.
+func (m *Manager) KernelNATSupported() bool { return kernelNATSupported }
 
 // ExitActive reports whether exit routes are installed.
 func (m *Manager) ExitActive() bool {

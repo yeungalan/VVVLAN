@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"sync/atomic"
 	"time"
 
 	"gvisor.dev/gvisor/pkg/buffer"
@@ -46,6 +47,40 @@ type NAT struct {
 	ep     *channel.Endpoint
 	log    *slog.Logger
 	cancel context.CancelFunc
+
+	tcpFlows    atomic.Int64
+	udpFlows    atomic.Int64
+	dialErrors  atomic.Int64
+	lastDialLog atomic.Int64 // unix seconds, rate-limits dial error logging
+}
+
+// Stats is a snapshot of NAT activity, used for diagnostics.
+type Stats struct {
+	TCPFlows   int64 `json:"tcp_flows"`
+	UDPFlows   int64 `json:"udp_flows"`
+	DialErrors int64 `json:"dial_errors"`
+}
+
+// Stats returns cumulative flow counters.
+func (n *NAT) Stats() Stats {
+	return Stats{
+		TCPFlows:   n.tcpFlows.Load(),
+		UDPFlows:   n.udpFlows.Load(),
+		DialErrors: n.dialErrors.Load(),
+	}
+}
+
+// noteDialError counts a failed outbound dial and logs it at most once per
+// 10 seconds — a stream of these usually means the gateway host itself has
+// no internet access or a firewall blocks outbound connections.
+func (n *NAT) noteDialError(proto, dst string, err error) {
+	n.dialErrors.Add(1)
+	now := time.Now().Unix()
+	last := n.lastDialLog.Load()
+	if now-last >= 10 && n.lastDialLog.CompareAndSwap(last, now) {
+		n.log.Warn("userspace NAT could not reach destination", "proto", proto, "dst", dst, "err", err,
+			"total_dial_errors", n.dialErrors.Load())
+	}
 }
 
 // New creates a userspace NAT. emit is called (from an internal goroutine)
@@ -140,9 +175,11 @@ func (n *NAT) handleTCP(r *tcp.ForwarderRequest) {
 
 	outbound, err := net.DialTimeout("tcp", dst, dialTimeout)
 	if err != nil {
+		n.noteDialError("tcp", dst, err)
 		r.Complete(true) // send RST: destination unreachable
 		return
 	}
+	n.tcpFlows.Add(1)
 
 	var wq waiter.Queue
 	ep, tcpErr := r.CreateEndpoint(&wq)
@@ -170,9 +207,11 @@ func (n *NAT) handleUDP(r *udp.ForwarderRequest) (handled bool) {
 	inbound := gonet.NewUDPConn(&wq, ep)
 	outbound, err := net.Dial("udp", dst)
 	if err != nil {
+		n.noteDialError("udp", dst, err)
 		inbound.Close()
 		return true
 	}
+	n.udpFlows.Add(1)
 	go spliceUDP(inbound, outbound)
 	go spliceUDP(outbound, inbound)
 	return true

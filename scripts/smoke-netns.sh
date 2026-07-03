@@ -185,6 +185,30 @@ done
 echo "$BODY" | grep -q '"ok"' || fail "unexpected response body: $BODY"
 ip netns exec ns2 "$WORK/bin/vvvland" status | grep -q "userspace NAT" || fail "gateway not in userspace NAT mode"
 echo "    TCP fetch through userspace-NAT gateway OK ($BODY)"
+# UDP (DNS-shaped) flow through the same gateway.
+python3 - <<'PYEOF' &
+import socket
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.bind(("198.51.100.1", 5399))
+s.settimeout(30)
+try:
+    data, addr = s.recvfrom(2048)
+    s.sendto(b"echo:" + data, addr)
+except socket.timeout:
+    pass
+PYEOF
+UDP_SRV=$!
+sleep 0.5
+ip netns exec ns1 python3 - <<'PYEOF' || fail "UDP via userspace-NAT gateway"
+import socket, sys
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.settimeout(10)
+s.sendto(b"query", ("198.51.100.1", 5399))
+data, _ = s.recvfrom(2048)
+assert data == b"echo:query", data
+PYEOF
+wait $UDP_SRV 2>/dev/null
+echo "    UDP flow through userspace-NAT gateway OK"
 ip netns exec ns1 "$WORK/bin/vvvland" exit off >/dev/null
 stop_agents
 

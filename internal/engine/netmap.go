@@ -132,7 +132,7 @@ func (e *Engine) UpdateNetMap(nm *proto.NetMap) {
 // stack, the way Tailscale's netstack mode does it. Userspace mode forwards
 // TCP and UDP (not ICMP) and needs no OS configuration at all.
 func (e *Engine) enableGatewayNAT(cidr netip.Prefix) error {
-	if !e.cfg.UserspaceNAT {
+	if !e.cfg.UserspaceNAT && e.cfg.NetCfg.KernelNATSupported() {
 		if err := e.cfg.NetCfg.EnableGatewayNAT(cidr); err == nil {
 			e.mu.Lock()
 			e.natActive = true
@@ -296,16 +296,17 @@ type PeerStatus struct {
 
 // Status is an engine snapshot for the local API / CLI.
 type Status struct {
-	NodeID      string       `json:"node_id"`
-	VirtualIP   string       `json:"virtual_ip"`
-	CIDR        string       `json:"cidr"`
-	RelayAddr   string       `json:"relay_addr"`
-	RelayBound  bool         `json:"relay_bound"`
-	PublicAddr  string       `json:"public_addr,omitempty"`
-	ExitEnabled bool         `json:"exit_enabled"`
-	IsGateway   bool         `json:"is_gateway"`
-	NATMode     string       `json:"nat_mode,omitempty"` // kernel|userspace when gateway
-	Peers       []PeerStatus `json:"peers"`
+	NodeID      string         `json:"node_id"`
+	VirtualIP   string         `json:"virtual_ip"`
+	CIDR        string         `json:"cidr"`
+	RelayAddr   string         `json:"relay_addr"`
+	RelayBound  bool           `json:"relay_bound"`
+	PublicAddr  string         `json:"public_addr,omitempty"`
+	ExitEnabled bool           `json:"exit_enabled"`
+	IsGateway   bool           `json:"is_gateway"`
+	NATMode     string         `json:"nat_mode,omitempty"` // kernel|userspace when gateway
+	NATStats    *usernat.Stats `json:"nat_stats,omitempty"`
+	Peers       []PeerStatus   `json:"peers"`
 }
 
 // Snapshot returns the current engine status.
@@ -328,6 +329,10 @@ func (e *Engine) Snapshot() Status {
 	}
 	if e.observedEP.IsValid() {
 		st.PublicAddr = e.observedEP.String()
+	}
+	if e.unat != nil {
+		stats := e.unat.Stats()
+		st.NATStats = &stats
 	}
 	for _, p := range e.peersByID {
 		ps := PeerStatus{

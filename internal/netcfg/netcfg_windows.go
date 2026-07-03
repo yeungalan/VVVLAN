@@ -85,3 +85,6 @@ func disableNAT(cidr netip.Prefix) error {
 	_, err := powershell(`Remove-NetNat -Name vvvlan -Confirm:$false`)
 	return err
 }
+
+// kernelNATSupported: see Manager.KernelNATSupported.
+const kernelNATSupported = false

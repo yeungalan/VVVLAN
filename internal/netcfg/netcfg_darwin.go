@@ -74,3 +74,6 @@ func enableNAT(cidr netip.Prefix) error {
 func disableNAT(cidr netip.Prefix) error {
 	return run("sysctl", "-w", "net.inet.ip.forwarding=0")
 }
+
+// kernelNATSupported: see Manager.KernelNATSupported.
+const kernelNATSupported = false

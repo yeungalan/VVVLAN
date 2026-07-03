@@ -113,6 +113,10 @@ func cmdStatus(args []string) error {
 			mode = "starting"
 		}
 		fmt.Printf("role        internet gateway for this network (%s NAT)\n", mode)
+		if st.NATStats != nil {
+			fmt.Printf("nat flows   tcp=%d udp=%d dial_errors=%d\n",
+				st.NATStats.TCPFlows, st.NATStats.UDPFlows, st.NATStats.DialErrors)
+		}
 	}
 	if st.ExitEnabled {
 		fmt.Println("passthrough internet traffic routed via gateway")

@@ -19,3 +19,6 @@ func addHostRoute(dst, gw netip.Addr, ifName string) error { return errUnsupport
 func delHostRoute(dst, gw netip.Addr, ifName string) error { return errUnsupported }
 func enableNAT(cidr netip.Prefix) error                    { return errUnsupported }
 func disableNAT(cidr netip.Prefix) error                   { return errUnsupported }
+
+// kernelNATSupported: see Manager.KernelNATSupported.
+const kernelNATSupported = false

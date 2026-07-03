@@ -44,6 +44,9 @@ type NetConfigurator interface {
 	Pin(addr netip.Addr)
 	EnableGatewayNAT(cidr netip.Prefix) error
 	DisableGatewayNAT() error
+	// KernelNATSupported reports whether EnableGatewayNAT is reliable on
+	// this OS; when false, gateways use userspace NAT directly.
+	KernelNATSupported() bool
 }
 
 // NoopConfigurator ignores all configuration calls (tests, dry runs).
@@ -55,6 +58,7 @@ func (NoopConfigurator) DisableExit() error                         { return nil
 func (NoopConfigurator) Pin(netip.Addr)                             {}
 func (NoopConfigurator) EnableGatewayNAT(netip.Prefix) error        { return nil }
 func (NoopConfigurator) DisableGatewayNAT() error                   { return nil }
+func (NoopConfigurator) KernelNATSupported() bool                   { return false }
 
 // Config configures an Engine.
 type Config struct {

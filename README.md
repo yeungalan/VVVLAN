@@ -93,14 +93,15 @@ vvvland exit on    # route all internet traffic via the gateway
 vvvland exit off
 ```
 
-The gateway node NATs overlay traffic to the internet. OS-level NAT is
-used where available (Linux iptables, Windows Pro/Server NetNat, macOS with
-a pf rule); everywhere else — including Windows Home — the agent
-automatically falls back to **userspace NAT**: gateway traffic is
-terminated by an in-process TCP/IP stack (gVisor netstack, the same
-approach Tailscale uses) and re-dialed as ordinary sockets, with zero OS
-configuration. Userspace mode forwards TCP and UDP; ICMP ping does not
-traverse it. Pass `--userspace-nat` to `vvvland up` to force it.
+The gateway node NATs overlay traffic to the internet. On Linux this uses
+kernel NAT (iptables MASQUERADE). On **Windows and macOS** the gateway uses
+**userspace NAT**: gateway traffic is terminated by an in-process TCP/IP
+stack (gVisor netstack, the same approach Tailscale uses) and re-dialed as
+ordinary sockets, with zero OS configuration — WinNAT and pf are not
+touched, so it works on every Windows edition including Home. Userspace
+mode forwards TCP and UDP; ICMP ping does not traverse it, so verify
+passthrough with a browser or `curl`, not `ping`. Pass `--userspace-nat`
+to `vvvland up` to force userspace mode on Linux too.
 Clients keep their tunnel/control traffic pinned to the physical route, so
 there is no routing loop.
 
@@ -226,13 +227,18 @@ vvvland up --port 41642
 netsh advfirewall firewall add rule name="vvvland" dir=in action=allow protocol=UDP localport=41642
 ```
 
-**Gateway logs `OS gateway NAT unavailable, falling back to userspace NAT`**
+**Internet passthrough doesn't work after `vvvland exit on`**
 
-Normal on Windows Home (no WinNAT) and on macOS without a pf rule: the
-gateway keeps working, but NATs in userspace via the embedded netstack.
-TCP and UDP flow through fine; ICMP ping through the gateway does not, so
-test passthrough with a browser/curl rather than ping. Use a Linux or
-Windows Pro/Server gateway if you need kernel-speed forwarding or ICMP.
+Check the gateway first: `vvvland status` on the gateway shows
+`role internet gateway ... (userspace NAT)` plus flow counters
+(`nat flows tcp=… udp=… dial_errors=…`). If the flow counters stay at zero
+while a client browses, traffic is not reaching the gateway (check the
+client's `vvvland status` shows a tunnel to the gateway). If `dial_errors`
+climbs, the gateway host itself cannot reach the internet or an outbound
+firewall is blocking it — the log names the destinations that failed.
+Remember ICMP does not traverse userspace NAT: test with a browser or
+`curl`, not `ping`. Windows/macOS gateways always use userspace NAT
+(TCP/UDP); Linux gateways use kernel NAT and forward ICMP too.
 
 **A node shows `—` under Connectivity in the UI**
 

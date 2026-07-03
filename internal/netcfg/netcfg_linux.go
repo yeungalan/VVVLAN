@@ -91,3 +91,6 @@ func disableNAT(cidr netip.Prefix) error {
 	}
 	return firstErr
 }
+
+// kernelNATSupported: see Manager.KernelNATSupported.
+const kernelNATSupported = true
