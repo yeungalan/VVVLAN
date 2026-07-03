@@ -142,6 +142,10 @@ func (e *Engine) resolveRelay(hostport string) {
 	e.mu.Lock()
 	changed := e.relayAddr != ap
 	e.relayAddr = ap
+	if changed {
+		e.bindSince = time.Time{}
+		e.lastBindOK = time.Time{}
+	}
 	e.mu.Unlock()
 	if changed {
 		e.log.Info("using relay", "addr", ap)
@@ -241,7 +245,7 @@ func (e *Engine) Snapshot() Status {
 	st := Status{
 		NodeID:      e.self.String(),
 		CIDR:        prefixString(e.cidr),
-		RelayBound:  e.relayBound,
+		RelayBound:  e.relayHealthyLocked(),
 		ExitEnabled: e.exitActive,
 		IsGateway:   e.gatewayID == e.self.String(),
 	}

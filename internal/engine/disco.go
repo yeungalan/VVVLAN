@@ -219,18 +219,42 @@ func (e *Engine) timerLoop(ctx context.Context) {
 	}
 }
 
-// bindRelay (re)registers our address mapping with the relay server.
+// bindRelay (re)registers our address mapping with the relay server and
+// warns when the relay has stopped confirming our binds (unreachable UDP
+// port is the most common deployment problem).
 func (e *Engine) bindRelay() {
 	e.mu.Lock()
 	relayAddr := e.relayAddr
-	e.mu.Unlock()
 	if !relayAddr.IsValid() {
+		e.mu.Unlock()
 		return
+	}
+	now := time.Now()
+	if e.bindSince.IsZero() {
+		e.bindSince = now
+	}
+	warn := !e.relayHealthyLocked() &&
+		now.Sub(e.bindSince) > 30*time.Second &&
+		now.Sub(e.lastRelayWarn) > time.Minute
+	if warn {
+		e.lastRelayWarn = now
+	}
+	e.mu.Unlock()
+	if warn {
+		e.log.Warn("relay server is not responding — peers without a direct path will be unreachable; "+
+			"check that the relay UDP port is reachable (server firewall rule, router port forwarding)",
+			"relay", relayAddr)
 	}
 	bind := proto.RelayBind{NodeID: e.self, SessionToken: e.cfg.SessionToken}
 	e.conn.WriteToUDPAddrPort(bind.Marshal(), relayAddr)
 	// The relay socket doubles as our endpoint reflector.
 	e.conn.WriteToUDPAddrPort(proto.EncodeWhoAmI(randUint64()), relayAddr)
+}
+
+// relayHealthyLocked reports whether the relay confirmed a bind recently.
+// Callers must hold e.mu.
+func (e *Engine) relayHealthyLocked() bool {
+	return !e.lastBindOK.IsZero() && time.Since(e.lastBindOK) < 90*time.Second
 }
 
 func (e *Engine) setObservedEndpoint(observed netip.AddrPort) {
@@ -352,6 +376,7 @@ func (e *Engine) maintainPeers() {
 		if hasQueue && !hasSession {
 			e.startHandshake(p)
 		}
+		e.reportPath(p) // no-op unless the path state changed
 	}
 }
 
@@ -372,6 +397,9 @@ func (e *Engine) pruneSessions() {
 	}
 }
 
+// reportPath publishes the peer's current path state (direct endpoint or
+// relay) to the control server, but only when it changed since the last
+// report, so it is cheap to call from periodic maintenance.
 func (e *Engine) reportPath(peer *peerState) {
 	if e.cfg.ReportPath == nil {
 		return
@@ -379,14 +407,27 @@ func (e *Engine) reportPath(peer *peerState) {
 	e.mu.Lock()
 	rep := proto.PathReport{
 		PeerNodeID: peer.id.String(),
-		Direct:     peer.direct.IsValid(),
 		LatencyMS:  peer.rtt.Milliseconds(),
 	}
-	if peer.direct.IsValid() {
+	var state string
+	switch {
+	case peer.direct.IsValid():
+		rep.Direct = true
 		rep.Endpoint = peer.direct.String()
+		state = "direct:" + rep.Endpoint
+	case peer.session != nil:
+		state = "relay"
+	default:
+		// No tunnel yet — nothing to report.
+		e.mu.Unlock()
+		return
 	}
+	changed := state != peer.lastReport
+	peer.lastReport = state
 	e.mu.Unlock()
-	e.cfg.ReportPath(rep)
+	if changed {
+		e.cfg.ReportPath(rep)
+	}
 }
 
 func randUint64() uint64 {
