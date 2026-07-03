@@ -62,11 +62,23 @@ func enableNAT(cidr netip.Prefix) error {
 	if _, err := powershell(`Get-NetIPInterface -AddressFamily IPv4 | Set-NetIPInterface -Forwarding Enabled`); err != nil {
 		return err
 	}
-	_, err := powershell(fmt.Sprintf(`New-NetNat -Name vvvlan -InternalIPInterfaceAddressPrefix %s`, cidr))
-	if err != nil && strings.Contains(err.Error(), "already exists") {
+	// A NAT from a previous run may still exist (locale-proof check, since
+	// error strings are localized).
+	if _, err := powershell(`Get-NetNat -Name vvvlan -ErrorAction Stop`); err == nil {
 		return nil
 	}
-	return err
+	// The WinNAT service is frequently stopped even where it is installed.
+	powershell(`Start-Service winnat`) // best effort
+	_, err := powershell(fmt.Sprintf(`New-NetNat -Name vvvlan -InternalIPInterfaceAddressPrefix %s`, cidr))
+	if err != nil {
+		// HRESULT 0x80041010 (WBEM_E_INVALID_CLASS): the NetNat WMI class
+		// does not exist — this Windows edition has no WinNAT (e.g. Home).
+		if strings.Contains(err.Error(), "0x80041010") {
+			return fmt.Errorf("this Windows edition does not support NetNat (WinNAT is unavailable, typically on Windows Home) — designate a Linux/macOS node, or a Windows Pro/Server machine, as the network gateway instead: %w", err)
+		}
+		return err
+	}
+	return nil
 }
 
 func disableNAT(cidr netip.Prefix) error {

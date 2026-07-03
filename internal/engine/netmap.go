@@ -89,6 +89,7 @@ func (e *Engine) UpdateNetMap(nm *proto.NetMap) {
 	}
 	isGateway := nm.GatewayNodeID == e.self.String()
 	natActive := e.natActive
+	natRetryOK := time.Now().After(e.natRetryAt)
 	e.mu.Unlock()
 
 	if vipChanged {
@@ -104,23 +105,31 @@ func (e *Engine) UpdateNetMap(nm *proto.NetMap) {
 		e.bindRelay()
 	}
 
-	// Gateway role: turn OS NAT on/off to match the netmap.
+	// Gateway role: turn OS NAT on/off to match the netmap. Netmaps arrive
+	// frequently, so failed attempts are retried on a cool-down instead of
+	// on every update.
 	switch {
-	case isGateway && !natActive:
+	case isGateway && !natActive && natRetryOK:
 		if err := e.cfg.NetCfg.EnableGatewayNAT(cidr); err != nil {
-			e.log.Error("enabling gateway NAT failed", "err", err)
+			e.log.Error("enabling gateway NAT failed; retrying in 5m", "err", err)
+			e.mu.Lock()
+			e.natRetryAt = time.Now().Add(5 * time.Minute)
+			e.mu.Unlock()
 		} else {
 			e.mu.Lock()
 			e.natActive = true
 			e.mu.Unlock()
 			e.log.Info("this node is now the internet gateway for the network")
 		}
-	case !isGateway && natActive:
-		if err := e.cfg.NetCfg.DisableGatewayNAT(); err != nil {
-			e.log.Warn("disabling gateway NAT failed", "err", err)
+	case !isGateway:
+		if natActive {
+			if err := e.cfg.NetCfg.DisableGatewayNAT(); err != nil {
+				e.log.Warn("disabling gateway NAT failed", "err", err)
+			}
 		}
 		e.mu.Lock()
 		e.natActive = false
+		e.natRetryAt = time.Time{} // re-designation retries immediately
 		e.mu.Unlock()
 	}
 

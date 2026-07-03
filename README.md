@@ -220,6 +220,16 @@ vvvland up --port 41642
 netsh advfirewall firewall add rule name="vvvland" dir=in action=allow protocol=UDP localport=41642
 ```
 
+**Gateway on Windows logs `enabling gateway NAT failed` with HRESULT 0x80041010**
+
+That Windows edition has no WinNAT (`New-NetNat` is only available on
+Windows Pro/Server; Home lacks the NetNat WMI class entirely). Internet
+passthrough can't be set up automatically there — designate a Linux, macOS,
+or Windows Pro/Server node as the network gateway instead. On Pro/Server,
+the agent also starts the `winnat` service automatically if it is stopped.
+This only affects internet passthrough; normal peer-to-peer overlay traffic
+through that node works regardless.
+
 **A node shows `—` under Connectivity in the UI**
 
 No tunnel to any peer has been established yet (paths appear after the

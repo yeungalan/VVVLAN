@@ -144,6 +144,7 @@ type Engine struct {
 	exitWanted    bool
 	exitActive    bool
 	natActive     bool
+	natRetryAt    time.Time    // cool-down after a failed gateway NAT setup
 	controlIPs    []netip.Addr // pinned when exit mode is enabled
 
 	closed chan struct{}
